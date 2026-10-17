@@ -89,15 +89,21 @@ object KuGou {
         callback: (String) -> Unit,
     ) {
         val keyword = generateKeyword(title, artist)
-        searchSongs(keyword).data.info.forEach {
+        // A candidate found by hash and again by keyword was downloaded (2 requests) and offered twice.
+        val seenCandidates = HashSet<Long>()
+        attempt { searchSongs(keyword).data.info }?.forEach {
             if (duration == -1 || abs(it.duration - duration) <= DURATION_TOLERANCE) {
-                searchLyricsByHash(it.hash).candidates.firstOrNull()?.let { candidate ->
-                    downloadBestLyrics(candidate.id, candidate.accesskey)?.let(callback)
+                attempt { searchLyricsByHash(it.hash).candidates.firstOrNull() }?.let { candidate ->
+                    if (seenCandidates.add(candidate.id)) {
+                        attempt { downloadBestLyrics(candidate.id, candidate.accesskey) }?.let(callback)
+                    }
                 }
             }
         }
-        searchLyricsByKeyword(keyword, duration).candidates.forEach { candidate ->
-            downloadBestLyrics(candidate.id, candidate.accesskey)?.let(callback)
+        attempt { searchLyricsByKeyword(keyword, duration).candidates }?.forEach { candidate ->
+            if (seenCandidates.add(candidate.id)) {
+                attempt { downloadBestLyrics(candidate.id, candidate.accesskey) }?.let(callback)
+            }
         }
     }
 
@@ -105,14 +111,26 @@ object KuGou {
         keyword: Keyword,
         duration: Int,
     ): SearchLyricsResponse.Candidate? {
-        searchSongs(keyword).data.info.forEach { song ->
+        // Each lookup is isolated: one failing request (timeout, 5xx, odd payload) must not skip
+        // the remaining songs nor the keyword search below.
+        attempt { searchSongs(keyword).data.info }?.forEach { song ->
             if (duration == -1 || abs(song.duration - duration) <= DURATION_TOLERANCE) { // if duration == -1, we don't care duration
-                val candidate = searchLyricsByHash(song.hash).candidates.firstOrNull()
+                val candidate = attempt { searchLyricsByHash(song.hash).candidates.firstOrNull() }
                 if (candidate != null) return candidate
             }
         }
-        return searchLyricsByKeyword(keyword, duration).candidates.firstOrNull()
+        return attempt { searchLyricsByKeyword(keyword, duration).candidates.firstOrNull() }
     }
+
+    /** Runs [block], returning null on any failure except coroutine cancellation. */
+    private suspend inline fun <T> attempt(block: () -> T): T? =
+        try {
+            block()
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
 
     suspend fun searchSongs(keyword: Keyword) =
         client
@@ -250,7 +268,10 @@ object KuGou {
                 val filteredLines = lines.drop(headCutLine)
 
                 var tailCutLine = 0
-                for (i in min(lines.size - HEAD_CUT_LIMIT, lines.lastIndex) downTo 0) {
+                // Only the last HEAD_CUT_LIMIT lines can be credits. Scanning from line
+                // (size - limit) down to the end made any lyric line containing a ':' after the
+                // 30th line cut the rest of the song.
+                for (i in min(HEAD_CUT_LIMIT, lines.lastIndex) downTo 0) {
                     if (lines[lines.lastIndex - i].matches(BANNED_REGEX)) {
                         tailCutLine = i + 1
                         break

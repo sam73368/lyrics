@@ -72,7 +72,7 @@ object Unison {
 
         if (cleanTitle.isBlank() || cleanArtist.isBlank()) return null
 
-        val byMetadata = searchEntries(cleanTitle, cleanArtist, album?.trim(), durationSeconds).firstOrNull()
+        val byMetadata = searchEntries(cleanTitle, cleanArtist, album?.trim(), durationSeconds, maxEntries = 1).firstOrNull()
         if (byMetadata != null) return byMetadata
 
         val cleanVideoId = videoId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
@@ -146,6 +146,9 @@ object Unison {
         artist: String,
         album: String?,
         durationSeconds: Int,
+        // getLyrics() only uses the first entry; fetching all of them (up to 2 extra requests each)
+        // could run past the caller's timeout and throw away an already valid first result.
+        maxEntries: Int = MAX_SEARCH_RESULTS,
     ): List<UnisonEntry> {
         val cleanTitle = title.trim()
         val cleanArtist = artist.trim()
@@ -170,7 +173,7 @@ object Unison {
             val entries = mutableListOf<UnisonEntry>()
             for (summary in summaries) {
                 currentCoroutineContext().ensureActive()
-                if (entries.size >= MAX_SEARCH_RESULTS) break
+                if (entries.size >= maxEntries) break
                 val entry =
                     summary.toEntry()
                         ?: summary.videoId?.takeIf { it.isNotBlank() }?.let { fetchByVideoId(it) }

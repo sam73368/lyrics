@@ -27,8 +27,7 @@ internal fun List<Track>.bestMatchingFor(duration: Int): Track? {
         return firstOrNull { it.syncedLyrics != null } ?: firstOrNull()
     }
 
-    return minByOrNull { abs(it.duration.toInt() - duration) }
-        ?.takeIf { abs(it.duration.toInt() - duration) <= 2 }
+    return closestWithinTolerance(duration)
 }
 
 internal fun List<Track>.bestMatchingFor(
@@ -45,8 +44,7 @@ internal fun List<Track>.bestMatchingFor(
         return firstOrNull { it.syncedLyrics != null } ?: firstOrNull()
     }
 
-    return minByOrNull { abs(it.duration.toInt() - duration) }
-        ?.takeIf { abs(it.duration.toInt() - duration) <= 2 }
+    return closestWithinTolerance(duration)
 }
 
 private fun List<Track>.findBestMatch(
@@ -137,3 +135,17 @@ private fun levenshteinDistance(
 
     return matrix[len1][len2]
 }
+
+/**
+ * Among tracks whose duration is within 2 s, prefer one that has synced lyrics, then the closest
+ * duration. Picking only the closest could return a plain-text duplicate (200.0 s) over a synced
+ * one (200.4 s) because both truncate to the same whole second.
+ */
+private fun List<Track>.closestWithinTolerance(duration: Int): Track? =
+    filter { abs(it.duration.toInt() - duration) <= 2 }
+        .sortedWith(
+            compareBy<Track>(
+                { it.syncedLyrics.isNullOrBlank() },
+                { abs(it.duration - duration) },
+            ),
+        ).firstOrNull()

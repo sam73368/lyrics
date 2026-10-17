@@ -46,13 +46,19 @@ object TTMLParser {
 
     private val whitespaceRegex = Regex("\\s+")
 
+    // Compiled once: parseTime runs for every <p> and <span> of a song.
+    private val offsetTimeRegex = Regex("""^([0-9]+(?:\.[0-9]+)?)(h|ms|m|s|f|t)$""", RegexOption.IGNORE_CASE)
+
+    private val documentBuilderFactory: DocumentBuilderFactory by lazy {
+        DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+    }
+
     fun parseTTML(ttml: String): List<ParsedLine> {
         val lines = mutableListOf<ParsedLine>()
 
         try {
-            val factory = DocumentBuilderFactory.newInstance()
-            factory.isNamespaceAware = true
-            val builder = factory.newDocumentBuilder()
+            // The factory is cached, but DocumentBuilder instances are not thread-safe: one per parse.
+            val builder = synchronized(documentBuilderFactory) { documentBuilderFactory.newDocumentBuilder() }
             val doc = builder.parse(ttml.byteInputStream())
             val timingContext = readTimingContext(doc.documentElement)
             val transliterations = parseTransliterations(doc.documentElement)
@@ -550,7 +556,7 @@ object TTMLParser {
         val frameRateMultiplierRaw = getAttrBySuffix("frameRateMultiplier")
         val frameRateMultiplier =
             frameRateMultiplierRaw
-                ?.split(Regex("\\s+"))
+                ?.split(whitespaceRegex)
                 ?.mapNotNull { it.toDoubleOrNull() }
                 ?.takeIf { it.size == 2 && it[1] != 0.0 }
                 ?.let { it[0] / it[1] }
@@ -597,8 +603,7 @@ object TTMLParser {
             val raw = timeStr.trim()
             if (raw.isEmpty()) return 0.0
 
-            val offsetRegex = Regex("""^([0-9]+(?:\.[0-9]+)?)(h|ms|m|s|f|t)$""", RegexOption.IGNORE_CASE)
-            offsetRegex.matchEntire(raw)?.let { m ->
+            offsetTimeRegex.matchEntire(raw)?.let { m ->
                 val value = m.groupValues[1].toDoubleOrNull() ?: return 0.0
                 return when (m.groupValues[2].lowercase()) {
                     "h" -> value * 3600.0
